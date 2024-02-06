@@ -128,6 +128,10 @@ const typeDefs = `
     author: String!
     genres: [String]!
   ): Book
+  editAuthor(
+    name: String
+    setBornTo: Int
+  ): Author
 }
 `
 
@@ -151,9 +155,31 @@ const resolvers = {
     Mutation: {
         addBook: (root, args) => {
             const book = { ...args, id: uuid() }
-            books = books.concat(book)
+            books = [...books, book]
             console.log("🚀 ~ books:", books)
             return book
+        },
+        editAuthor: (root, args) => {
+            // if (args.name && args.setBornTo) {
+            //     const author = authors.find(author => author.name === args.name)
+            //     author.born = args.setBornTo
+            //     return author
+            // }
+            // return null
+            if (args.name && args.setBornTo) {
+                const authorIndex = authors.findIndex(author => author.name === args.name);
+
+                // Check if author is found
+                if (authorIndex === -1) {
+                    return null
+                }
+
+                // Update the author's born year
+                authors[authorIndex].born = args.setBornTo;
+                return authors[authorIndex];
+            } else {
+                throw new Error('Missing required arguments');
+            }
         }
     }
 }
