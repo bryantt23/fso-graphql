@@ -3,6 +3,7 @@ const { startStandaloneServer } = require('@apollo/server/standalone');
 const mongoose = require('mongoose');
 const Book = require("./models/book"); // Ensure these models exist and are correctly defined
 const Author = require("./models/author");
+const { GraphQLError } = require('graphql');
 
 require('dotenv').config();
 
@@ -71,31 +72,55 @@ const resolvers = {
             return Book.find(query).populate('author');
         },
         allAuthors: async () => {
-            try {
-                return await Author.find({});
-            } catch (error) {
-                console.error("Error fetching authors:", error);
-                throw new Error(error);
-            }
+            return await Author.find({});
         },
     },
     Mutation: {
         addBook: async (_, args) => {
-            const author = await Author.findOne({ name: args.author });
-            if (!author) {
-                throw new Error(`Author ${args.author} not found`);
+            try {
+                const author = await Author.findOne({ name: args.author });
+                if (!author) {
+                    throw new GraphQLError(`Author '${args.author}' not found`, {
+                        invalidArgs: args.author,
+                    });
+                }
+                const book = new Book({ ...args, author: author._id });
+                await book.save();
+                return book.populate('author');
+            } catch (error) {
+                if (error.name === 'ValidationError') {
+                    const message = Object.values(error.errors).map(val => val.message).join(', ');
+                    throw new GraphQLError(message, {
+                        invalidArgs: Object.keys(error.errors),
+                    });
+                }
+                throw error;
             }
-            const book = new Book({ ...args, author: author._id });
-            await book.save();
-            return book.populate('author');
         },
         editAuthor: async (_, args) => {
-            const author = await Author.findOneAndUpdate({ name: args.name }, { born: args.setBornTo }, { new: true });
-            return author;
-        }
+            try {
+                const author = await Author.findOneAndUpdate({ name: args.name }, { born: args.setBornTo }, { new: true, runValidators: true });
+                if (!author) {
+                    throw new GraphQLError(`Author '${args.name}' not found`, {
+                        invalidArgs: args.name,
+                    });
+                }
+                return author;
+            } catch (error) {
+                if (error.name === 'ValidationError') {
+                    const message = Object.values(error.errors).map(val => val.message).join(', ');
+                    throw new GraphQLError(message, {
+                        invalidArgs: Object.keys(error.errors),
+                    });
+                }
+                throw error;
+            }
+        },
     },
     Author: {
-        bookCount: async (author) => Book.countDocuments({ author: author._id }),
+        bookCount: async (author) => {
+            return Book.countDocuments({ author: author._id });
+        },
     }
 };
 
