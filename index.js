@@ -154,31 +154,34 @@ const resolvers = {
                 throw error;
             }
         },
-        createUser: async (_, { username, favoriteGenre }) => {
-            const user = await User.create({ username, favoriteGenre });
+        createUser: async (_, { username, favoriteGenre, passwordHash = "password" }) => {
+            const user = await User.create({ username, favoriteGenre, passwordHash });
             return user;
         },
         login: async (root, args, context) => {
-            console.log("🚀 ~ login: ~ args:", args)
-            if (args.username !== 'exampleUser' || args.password !== 'password') {
-                throw new GraphQLError('wrong credentials', {
+            const { username, password } = args;
+            // Find the user with the provided username in the database
+            const user = await User.findOne({ username });
+
+            // If the user is not found or the password is incorrect, throw an error
+            if (!user || password !== 'password') {
+                throw new GraphQLError('Wrong credentials', {
                     extensions: {
                         code: 'BAD_USER_INPUT'
                     }
-                })
+                });
             }
 
-            const user = await User.findOne({ username: args.username })
-            console.log("🚀 ~ login: ~ user:", user)
-
+            // If the user is found and the password is correct, generate a JWT token
             const userForToken = {
-                username: args.username,
+                username: user.username,
                 id: user._id,
-            }
-            console.log("🚀 ~ login: ~ userForToken:", userForToken)
+            };
+            const token = jwt.sign(userForToken, JWT_SECRET);
 
-            return { value: jwt.sign(userForToken, JWT_SECRET) }
-        },
+            // Return the token
+            return { value: token };
+        }
     },
     Author: {
         bookCount: async (author) => {
