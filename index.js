@@ -95,7 +95,7 @@ const resolvers = {
         }
     },
     Author: {
-        bookCount: (author) => Book.countDocuments({ author: author._id }),
+        bookCount: async (author) => Book.countDocuments({ author: author._id }),
     }
 };
 
