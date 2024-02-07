@@ -1,9 +1,8 @@
 const { ApolloServer } = require('@apollo/server');
 const { startStandaloneServer } = require('@apollo/server/standalone');
 const mongoose = require('mongoose');
-const Book = require("./models/book"); // Ensure these models exist and are correctly defined
-const Author = require("./models/author");
 const { GraphQLError } = require('graphql');
+const jwt = require('jsonwebtoken');
 
 require('dotenv').config();
 
@@ -18,6 +17,10 @@ mongoose.connect(MONGODB_URI, { useNewUrlParser: true, useUnifiedTopology: true 
     .catch((error) => {
         console.log('Error connecting to MongoDB:', error.message);
     });
+
+const Book = require("./models/book"); // Ensure these models exist and are correctly defined
+const Author = require("./models/author");
+const User = require("./models/user");
 
 const typeDefs = `
   type Book {
@@ -35,11 +38,22 @@ const typeDefs = `
     bookCount: Int
   }
 
+  type User {
+    username: String!
+    favoriteGenre: String!
+    id: ID!
+  }
+
+  type Token {
+    value: String!
+  }
+
   type Query {
     bookCount: Int
     authorCount: Int
     allBooks(author: String, genre: String): [Book]
     allAuthors: [Author]
+    me: User
   }
 
   type Mutation {
@@ -53,6 +67,14 @@ const typeDefs = `
       name: String
       setBornTo: Int
     ): Author
+    createUser(
+      username: String!
+      favoriteGenre: String!
+    ): User
+    login(
+      username: String!
+      password: String!
+    ): Token
   }
 `;
 
@@ -74,6 +96,12 @@ const resolvers = {
         allAuthors: async () => {
             return await Author.find({});
         },
+        me: async (_, __, { user }) => {
+            if (!user) {
+                throw new Error('You are not authenticated.');
+            }
+            return user;
+        }
     },
     Mutation: {
         addBook: async (_, args) => {
@@ -116,6 +144,19 @@ const resolvers = {
                 throw error;
             }
         },
+        createUser: async (_, { username, favoriteGenre }) => {
+            const user = await User.create({ username, favoriteGenre });
+            return user;
+        },
+        login: async (_, { username, password }) => {
+            // Perform authentication here, for demonstration, just hardcoded
+            if (username === 'exampleUser' && password === 'password') {
+                const token = jwt.sign({ username }, process.env.JWT_SECRET);
+                return { value: token };
+            } else {
+                throw new Error('Invalid credentials');
+            }
+        }
     },
     Author: {
         bookCount: async (author) => {
@@ -127,6 +168,15 @@ const resolvers = {
 const server = new ApolloServer({
     typeDefs,
     resolvers,
+    context: ({ req }) => {
+        const token = req.headers.authorization || '';
+        try {
+            const user = jwt.verify(token, process.env.JWT_SECRET);
+            return { user };
+        } catch (error) {
+            return { user: null };
+        }
+    }
 });
 
 startStandaloneServer(server, { listen: { port: 4000 } }).then(({ url }) => {
