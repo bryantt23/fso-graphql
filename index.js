@@ -107,11 +107,9 @@ const resolvers = {
         addBook: async (_, args, context) => {
             console.log("🚀 ~ addBook: ~ context:", context)
             // Check if user is authenticated
-            if (!context.user) {
+            if (!context.currentUser) {
                 throw new Error('Authentication required.');
             }
-            console.log('Context user:', context.user); // Add this console log to print the user from context
-            console.log('Received args:', args); // Add this console log to print the received arguments
             try {
                 const author = await Author.findOne({ name: args.author });
                 if (!author) {
@@ -135,7 +133,7 @@ const resolvers = {
         },
         editAuthor: async (_, args, context) => {
             // Check if user is authenticated
-            if (!context.user) {
+            if (!context.currentUser) {
                 throw new Error('Authentication required.');
             }
             try {
