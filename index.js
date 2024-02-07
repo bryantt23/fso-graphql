@@ -1,11 +1,14 @@
 const { ApolloServer } = require('@apollo/server');
 const { startStandaloneServer } = require('@apollo/server/standalone');
+const { gql } = require('apollo-server-express/dist');
 const mongoose = require('mongoose');
+mongoose.set('strictQuery', false)
 const { GraphQLError } = require('graphql');
 const jwt = require('jsonwebtoken');
 
 require('dotenv').config();
 
+const JWT_SECRET = process.env.JWT_SECRET;
 const MONGODB_URI = process.env.MONGODB_URI;
 
 console.log('Connecting to', MONGODB_URI);
@@ -22,7 +25,7 @@ const Book = require("./models/book"); // Ensure these models exist and are corr
 const Author = require("./models/author");
 const User = require("./models/user");
 
-const typeDefs = `
+const typeDefs = gql`
   type Book {
     title: String!
     published: Int
@@ -96,15 +99,19 @@ const resolvers = {
         allAuthors: async () => {
             return await Author.find({});
         },
-        me: async (_, __, { user }) => {
-            if (!user) {
-                throw new Error('You are not authenticated.');
-            }
-            return user;
+        me: (root, args, context) => {
+            return context.currentUser
         }
     },
     Mutation: {
-        addBook: async (_, args) => {
+        addBook: async (_, args, context) => {
+            console.log("🚀 ~ addBook: ~ context:", context)
+            // Check if user is authenticated
+            if (!context.user) {
+                throw new Error('Authentication required.');
+            }
+            console.log('Context user:', context.user); // Add this console log to print the user from context
+            console.log('Received args:', args); // Add this console log to print the received arguments
             try {
                 const author = await Author.findOne({ name: args.author });
                 if (!author) {
@@ -114,6 +121,7 @@ const resolvers = {
                 }
                 const book = new Book({ ...args, author: author._id });
                 await book.save();
+                console.log('Saved book:', book); // Add this console log to print the saved book
                 return book.populate('author');
             } catch (error) {
                 if (error.name === 'ValidationError') {
@@ -125,7 +133,11 @@ const resolvers = {
                 throw error;
             }
         },
-        editAuthor: async (_, args) => {
+        editAuthor: async (_, args, context) => {
+            // Check if user is authenticated
+            if (!context.user) {
+                throw new Error('Authentication required.');
+            }
             try {
                 const author = await Author.findOneAndUpdate({ name: args.name }, { born: args.setBornTo }, { new: true, runValidators: true });
                 if (!author) {
@@ -148,15 +160,27 @@ const resolvers = {
             const user = await User.create({ username, favoriteGenre });
             return user;
         },
-        login: async (_, { username, password }) => {
-            // Perform authentication here, for demonstration, just hardcoded
-            if (username === 'exampleUser' && password === 'password') {
-                const token = jwt.sign({ username }, process.env.JWT_SECRET);
-                return { value: token };
-            } else {
-                throw new Error('Invalid credentials');
+        login: async (root, args, context) => {
+            console.log("🚀 ~ login: ~ args:", args)
+            if (args.username !== 'exampleUser' || args.password !== 'password') {
+                throw new GraphQLError('wrong credentials', {
+                    extensions: {
+                        code: 'BAD_USER_INPUT'
+                    }
+                })
             }
-        }
+
+            const user = await User.findOne({ username: args.username })
+            console.log("🚀 ~ login: ~ user:", user)
+
+            const userForToken = {
+                username: args.username,
+                id: user._id,
+            }
+            console.log("🚀 ~ login: ~ userForToken:", userForToken)
+
+            return { value: jwt.sign(userForToken, JWT_SECRET) }
+        },
     },
     Author: {
         bookCount: async (author) => {
@@ -168,17 +192,25 @@ const resolvers = {
 const server = new ApolloServer({
     typeDefs,
     resolvers,
-    context: ({ req }) => {
-        const token = req.headers.authorization || '';
-        try {
-            const user = jwt.verify(token, process.env.JWT_SECRET);
-            return { user };
-        } catch (error) {
-            return { user: null };
-        }
-    }
 });
 
-startStandaloneServer(server, { listen: { port: 4000 } }).then(({ url }) => {
-    console.log(`Server ready at ${url}`);
-});
+startStandaloneServer(server, {
+    listen: { port: 4000 },
+
+    context: async ({ req, res }) => {
+        // console.log("🚀 ~ context: ~ req:", req)
+        const auth = req ? req.headers.authorization : null
+        // console.log("🚀 ~ context: ~ auth:", auth)
+        if (auth && auth.startsWith('Bearer ')) {
+            const decodedToken = jwt.verify(
+                auth.substring(7), process.env.JWT_SECRET
+            )
+            const currentUser = await User
+                .findById(decodedToken.id)
+            // console.log("🚀 ~ context: ~ currentUser:", currentUser)
+            return { currentUser }
+        }
+    },
+}).then(({ url }) => {
+    console.log(`Server ready at ${url}`)
+})
