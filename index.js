@@ -5,6 +5,16 @@ const mongoose = require('mongoose');
 mongoose.set('strictQuery', false)
 const { GraphQLError } = require('graphql');
 const jwt = require('jsonwebtoken');
+const { PubSub } = require('graphql-subscriptions');
+const pubsub = new PubSub();
+const { expressMiddleware } = require('@apollo/server/express4')
+const { ApolloServerPluginDrainHttpServer } = require('@apollo/server/plugin/drainHttpServer')
+const { makeExecutableSchema } = require('@graphql-tools/schema')
+const express = require('express')
+const cors = require('cors')
+const http = require('http')
+const { WebSocketServer } = require('ws')
+const { useServer } = require('graphql-ws/lib/use/ws')
 
 require('dotenv').config();
 
@@ -79,6 +89,10 @@ const typeDefs = gql`
       password: String!
     ): Token
   }
+
+  type Subscription {
+    bookAdded: Book!
+  }
 `;
 
 const resolvers = {
@@ -120,7 +134,9 @@ const resolvers = {
                 const book = new Book({ ...args, author: author._id });
                 await book.save();
                 console.log('Saved book:', book); // Add this console log to print the saved book
-                return book.populate('author');
+                await book.populate('author')
+                pubsub.publish("BOOK_ADDED", { bookAdded: book })
+                return book;
             } catch (error) {
                 if (error.name === 'ValidationError') {
                     const message = Object.values(error.errors).map(val => val.message).join(', ');
@@ -183,6 +199,11 @@ const resolvers = {
             return { value: token };
         }
     },
+    Subscription: {
+        bookAdded: {
+            subscribe: () => pubsub.asyncIterator(['BOOK_ADDED'])
+        }
+    },
     Author: {
         bookCount: async (author) => {
             return Book.countDocuments({ author: author._id });
@@ -195,23 +216,64 @@ const server = new ApolloServer({
     resolvers,
 });
 
-startStandaloneServer(server, {
-    listen: { port: 4000 },
+// setup is now within a function
+const start = async () => {
+    const app = express()
+    const httpServer = http.createServer(app)
 
-    context: async ({ req, res }) => {
-        // console.log("🚀 ~ context: ~ req:", req)
-        const auth = req ? req.headers.authorization : null
-        // console.log("🚀 ~ context: ~ auth:", auth)
-        if (auth && auth.startsWith('Bearer ')) {
-            const decodedToken = jwt.verify(
-                auth.substring(7), process.env.JWT_SECRET
-            )
-            const currentUser = await User
-                .findById(decodedToken.id)
-            // console.log("🚀 ~ context: ~ currentUser:", currentUser)
-            return { currentUser }
-        }
-    },
-}).then(({ url }) => {
-    console.log(`Server ready at ${url}`)
-})
+    const wsServer = new WebSocketServer({
+        server: httpServer,
+        path: '/',
+    })
+
+    const schema = makeExecutableSchema({ typeDefs, resolvers })
+    const serverCleanup = useServer({ schema }, wsServer)
+
+    const server = new ApolloServer({
+        schema,
+        plugins: [
+            ApolloServerPluginDrainHttpServer({ httpServer }),
+            {
+                async serverWillStart() {
+                    return {
+                        async drainServer() {
+                            await serverCleanup.dispose();
+                        },
+                    };
+                },
+            },
+        ],
+    })
+
+    await server.start()
+
+    app.use(
+        '/',
+        cors(),
+        express.json(),
+        expressMiddleware(server, {
+            context: async ({ req, res }) => {
+                // console.log("🚀 ~ context: ~ req:", req)
+                const auth = req ? req.headers.authorization : null
+                // console.log("🚀 ~ context: ~ auth:", auth)
+                if (auth && auth.startsWith('Bearer ')) {
+                    const decodedToken = jwt.verify(
+                        auth.substring(7), process.env.JWT_SECRET
+                    )
+                    const currentUser = await User
+                        .findById(decodedToken.id)
+                    // console.log("🚀 ~ context: ~ currentUser:", currentUser)
+                    return { currentUser }
+                }
+            },
+        }),
+    )
+
+    const PORT = 4000
+
+    httpServer.listen(PORT, () =>
+        console.log(`Server is now running on http://localhost:${PORT}`)
+    )
+}
+
+start()
