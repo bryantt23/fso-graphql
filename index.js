@@ -15,6 +15,7 @@ const cors = require('cors')
 const http = require('http')
 const { WebSocketServer } = require('ws')
 const { useServer } = require('graphql-ws/lib/use/ws')
+const DataLoader = require('dataloader');
 
 require('dotenv').config();
 
@@ -34,6 +35,27 @@ mongoose.connect(MONGODB_URI, { useNewUrlParser: true, useUnifiedTopology: true 
 const Book = require("./models/book"); // Ensure these models exist and are correctly defined
 const Author = require("./models/author");
 const User = require("./models/user");
+
+// DataLoader batch function for loading books count by author IDs
+const batchBooksCount = async (authorIds) => {
+    // Convert authorIds to ObjectIds
+    const objectIds = authorIds.map((id) => new mongoose.Types.ObjectId(id));
+    console.log(`Converted author IDs: ${objectIds.join(', ')}`);
+
+    const books = await Book.aggregate([
+        { $match: { author: { $in: objectIds } } },
+        { $group: { _id: '$author', count: { $sum: 1 } } }
+    ]);
+
+    console.log('Aggregation result:', JSON.stringify(books));
+
+    const bookCountMap = books.reduce((map, { _id, count }) => {
+        map[_id.toString()] = count;
+        return map;
+    }, {});
+
+    return authorIds.map((authorId) => bookCountMap[authorId.toString()] || 0);
+};
 
 const typeDefs = gql`
   type Book {
@@ -205,10 +227,10 @@ const resolvers = {
         }
     },
     Author: {
-        bookCount: async (author) => {
-            return Book.countDocuments({ author: author._id });
+        bookCount: (author, args, context) => {
+            return context.booksCountLoader.load(author.id);
         },
-    }
+    },
 };
 
 const server = new ApolloServer({
@@ -256,6 +278,10 @@ const start = async () => {
                 // console.log("🚀 ~ context: ~ req:", req)
                 const auth = req ? req.headers.authorization : null
                 // console.log("🚀 ~ context: ~ auth:", auth)
+
+                // Setup DataLoader for books count
+                const booksCountLoader = new DataLoader(batchBooksCount);
+
                 if (auth && auth.startsWith('Bearer ')) {
                     const decodedToken = jwt.verify(
                         auth.substring(7), process.env.JWT_SECRET
@@ -263,7 +289,9 @@ const start = async () => {
                     const currentUser = await User
                         .findById(decodedToken.id)
                     // console.log("🚀 ~ context: ~ currentUser:", currentUser)
-                    return { currentUser }
+                    return {
+                        booksCountLoader, currentUser
+                    }
                 }
             },
         }),
